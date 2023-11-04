@@ -1,4 +1,197 @@
 
+#include <cstdlib>
+#include <string_view>
+#include <optional>
+#include <charconv>
+
+namespace aux
+{
+    inline std::string_view getenv(char const* key) noexcept {
+        if (auto raw_value = std::getenv(key)) {
+            return raw_value;
+        }
+        return ""; // for std::string_view from nullptr not allowed.
+    }
+
+    template <class T>
+    std::optional<T> from_getenv(char const* key) noexcept {
+        if (auto value = aux::getenv(key); !value.empty()) {
+            T tmp;
+            if (auto [p, e] = std::from_chars(value.begin(), value.end(), tmp); e == std::errc{}) {
+                return tmp;
+            }
+        }
+        return std::nullopt;
+    }
+
+} // ::aux
+
+/////////////////////////////////////////////////////////////////////////////
+#include <iosfwd>
+#include <stdexcept>
+#include <source_location>
+#include <array>
+#include <spanstream>
+#include <tuple>
+
+namespace aux
+{
+    template <class Ch, class Tr>
+    decltype (auto) operator<<(std::basic_ostream<Ch, Tr>& output, std::source_location const& loc) {
+        return output << loc.file_name() << ':'
+                      << loc.line() << ':'
+                      << loc.column() << ':'
+                      << loc.function_name();
+        return output;
+    }
+
+    struct exception : public std::domain_error {
+    public:
+        exception(char const* msg,
+                  std::source_location loc = std::source_location::current()) noexcept
+            : std::domain_error{msg}
+            , loc{loc}
+            {
+            }
+
+    public:
+        auto const& location() const noexcept { return this->loc; }
+
+    private:
+        std::source_location loc;
+    };
+
+    template <class Ch, class Tr>
+    decltype (auto) operator<<(std::basic_ostream<Ch, Tr>& output, exception const& ex) {
+        return output << ex.location() << ':' << ex.what();
+    }
+
+} // ::aux
+
+
+/////////////////////////////////////////////////////////////////////////////
+#include <cstdlib>
+
+#include <charconv>
+#include <optional>
+#include <filesystem>
+
+#include <fcntl.h>
+#include <sys/un.h>
+#include <sys/socket.h>
+
+#include <aux/io.hh>
+
+#include <iostream>
+namespace wayland
+{
+    auto error = [](auto...) noexcept {
+    };
+
+    void what(auto...) noexcept {
+        std::cout << __PRETTY_FUNCTION__ << std::endl;
+    }
+    struct display {
+        aux::unique_fd fd;
+    };
+
+    std::optional<display> display_connect(std::optional<std::filesystem::path> name = std::nullopt) {
+        aux::unique_fd fd;
+        if (auto raw_fd = aux::from_getenv<int>("WAYLAND_SOCKET")) {
+            if (int flags = ::fcntl(raw_fd.value(), F_GETFD); flags == -1 && errno == EBADF) {
+                return {};
+            }
+            else if (flags != -1) {
+                ::fcntl(raw_fd.value(), F_SETFD, flags | FD_CLOEXEC);
+            }
+            ::unsetenv("WAYLAND_SOCKET");
+            fd.reset(raw_fd.value());
+        }
+        else {
+            if (!name) {
+                name = aux::getenv("WAYLAND_DISPLAY");
+            }
+            if (name.value().empty()) {
+                name = "wayland-0";
+            }
+
+            std::filesystem::path dir = aux::getenv("XDG_RUNTIME_DIR");
+            if ((dir.empty() || dir.is_relative()) && name.value().is_relative()) {
+                error("XDG_RUNTIME_DIR is invalid or not set in the environtment.\n");
+                return {};
+            }
+
+            if (int raw_fd = ::socket(PF_LOCAL, SOCK_STREAM | SOCK_CLOEXEC, 0)) {
+                fd.reset(raw_fd);
+            }
+            else if (errno != EINVAL) {
+                return {};
+            }
+            else {
+                if (aux::unique_fd tmp_fd = ::socket(PF_LOCAL, SOCK_STREAM, 0)) {
+                    int flags = ::fcntl(tmp_fd, F_GETFD);
+                    if (flags == -1) {
+                        return {};
+                    }
+                    if (::fcntl(tmp_fd, F_SETFD, flags | FD_CLOEXEC) == -1) {
+                        return {};
+                    }
+                    fd = std::move(tmp_fd);
+                }
+                return {};
+            }
+
+            std::string native_path = name.value().is_absolute()
+                ? name.value().native()
+                : (dir / name.value()).native();
+
+            sockaddr_un addr = {
+                .sun_family = AF_LOCAL,
+            };
+            if (sizeof (addr.sun_path) < native_path.size() + 1) {
+                error("error: socket path ", native_path, " plus null terminator exceeds\n" );
+                return {};
+            }
+            std::copy(native_path.begin(), native_path.end(), addr.sun_path);
+            std::cout << "Check" << std::endl;
+            std::cout << addr.sun_path << std::endl;
+            if (::connect(fd.get(), reinterpret_cast<sockaddr*>(&addr),
+                          offsetof (sockaddr_un, sun_path) + native_path.size()) < 0) {
+                return {};
+            }
+            std::cout << "OK" << std::endl;
+        }
+        return display {
+            .fd = std::move(fd),
+        };
+    }
+
+} // ::wayland
+
+
+/////////////////////////////////////////////////////////////////////////////
+#include <iostream>
+#include <string_view>
+
+#include <aux/tuple-support.hh>
+
+int main() {
+    try {
+        if (auto disp = wayland::display_connect()) {
+            std::cout << disp.value().fd << std::endl;
+        }
+        else {
+            std::cerr << "Error!" << std::endl;
+        }
+    }
+    catch (aux::exception& ex) {
+        std::cout << ex << std::endl;
+    }
+    return 0;
+}
+
+
+#if 0
 #include <iostream>
 #include <memory>
 #include <filesystem>
@@ -16,7 +209,6 @@
 #include <sys/un.h>
 
 #include <aux/io.hh>
-#include <wayland-client-protocol.h>
 
 namespace wayland
 {
@@ -186,3 +378,4 @@ int main() {
         std::cout << ex << std::endl;
     }
 }
+#endif
