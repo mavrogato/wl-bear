@@ -13,7 +13,7 @@ project(wl-bear)
 # https://github.com/Cloudef/wlc/blob/master/CMake/FindWaylandProtocols.cmake
 include(FeatureSummary)
 set_package_properties(WaylandProtocols PROPERTIES
-  URL "https://cgit.freedesktop.org/wayland/wayland-protocolso"
+  URL "https://cgit.freedesktop.org/wayland/wayland-protocols"
   DESCRIPTION "Wayland protocol development")
 
 unset(WAYLANDPROTOCOLS_PATH)
