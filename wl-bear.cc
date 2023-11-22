@@ -2,15 +2,15 @@
 #include <string_view>
 #include <optional>
 #include <charconv>
-#include <array>
+#include <algorithm>
 
 namespace aux
 {
     template <class T>
-    constexpr std::optional<T> from_text(char const* text) noexcept {
+    constexpr std::optional<T> from_chars(char const* text) noexcept {
         if (text) {
             std::string_view view(text);
-            T result;
+            T result = {};
             if (auto [p, e] = std::from_chars(view.begin(), view.end(), result); e == std::errc{}) {
                 return result;
             }
@@ -20,13 +20,16 @@ namespace aux
 
     template <size_t N>
     constexpr size_t concat(char (&buf)[N], auto... args) noexcept {
+        static_assert(0 < N);
         size_t i = 0;
         for (auto arg : {std::string_view(args)...}) {
-            for (auto ch : arg) {
-                buf[i++] = ch;
-                if (i == N) {
-                    break;
-                }
+            if (i + std::size(arg) < N-1) {
+                std::copy(std::begin(arg), std::end(arg), buf + i);
+                i += std::size(arg);
+            }
+            else {
+                std::copy_n(std::begin(arg), N-1-i, buf + i);
+                return N-1;
             }
         }
         return i;
@@ -65,7 +68,7 @@ namespace wayland
 
         static std::optional<display> connect(char const* name = nullptr) noexcept {
             static constexpr auto get_prepared_sock = []() noexcept -> aux::unique_fd {
-                auto fd = aux::from_text<int>(std::getenv("WAYLAND_SOCKET"));
+                auto fd = aux::from_chars<int>(std::getenv("WAYLAND_SOCKET"));
                 if (!fd) {
                     return {};
                 }
